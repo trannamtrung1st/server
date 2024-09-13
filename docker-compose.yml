@@ -1,0 +1,15 @@
+name: aaspe
+version: "3.8"
+
+services:
+  db:
+    image: postgres
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: zaQ@123456!
+    ports:
+      - 5432:5432
+
+networks:
+  default:
+    name: asspe-server-network

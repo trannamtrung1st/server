@@ -81,20 +81,14 @@ namespace AasxServerDB
         public async Task ClearDB()
         {
             // Queue up all delete operations asynchronously
-            var tasks = new List<Task<int>>
-            {
-                AASXSets.ExecuteDeleteAsync(),
-                AASSets.ExecuteDeleteAsync(),
-                SMSets.ExecuteDeleteAsync(),
-                SMESets.ExecuteDeleteAsync(),
-                IValueSets.ExecuteDeleteAsync(),
-                SValueSets.ExecuteDeleteAsync(),
-                DValueSets.ExecuteDeleteAsync(),
-                OValueSets.ExecuteDeleteAsync()
-            };
-
-            // Wait for all delete tasks to complete
-            await Task.WhenAll(tasks);
+            await AASXSets.ExecuteDeleteAsync();
+            await AASSets.ExecuteDeleteAsync();
+            await SMSets.ExecuteDeleteAsync();
+            await SMESets.ExecuteDeleteAsync();
+            await IValueSets.ExecuteDeleteAsync();
+            await SValueSets.ExecuteDeleteAsync();
+            await DValueSets.ExecuteDeleteAsync();
+            await OValueSets.ExecuteDeleteAsync();
 
             // Save changes to the database
             SaveChanges();
