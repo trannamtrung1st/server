@@ -80,6 +80,15 @@ namespace AasxServer
             return "";
         }
 
+        public static void saveEnvDynamic(int envIndex)
+        {
+            var pkg = AasxServer.Program.env[envIndex];
+            if (pkg.IsOpen)
+                pkg.TemporarilySaveCloseAndReOpenPackage(lambda: null);
+            else
+                pkg.SaveAs(fn: pkg.Filename);
+        }
+
         public static void saveEnv(int envIndex)
         {
             Console.WriteLine("SAVE: " + envFileName[envIndex]);

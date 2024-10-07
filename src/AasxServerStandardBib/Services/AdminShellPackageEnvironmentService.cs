@@ -3,6 +3,7 @@ eine rechtlich nicht selbstaendige Einrichtung der Fraunhofer-Gesellschaft
 zur Foerderung der angewandten Forschung e.V.
  */
 
+using AasxRestServerLibrary;
 using AasxServer;
 using AasxServerStandardBib.Exceptions;
 using AasxServerStandardBib.Interfaces;
@@ -23,15 +24,34 @@ namespace AasxServerStandardBib.Services
         private readonly IAppLogger<AdminShellPackageEnvironmentService> _logger;
         private readonly Lazy<IAssetAdministrationShellService> _aasService;
         private AdminShellPackageEnv[] _packages;
+        private string[] _packageNames;
 
         public AdminShellPackageEnvironmentService(IAppLogger<AdminShellPackageEnvironmentService> logger, Lazy<IAssetAdministrationShellService> aasService)
         {
             _logger     = logger ?? throw new ArgumentNullException(nameof(logger));
             _aasService = aasService;
             _packages   = Program.env;
+            _packageNames = Program.envFileName;
         }
 
         #region Others
+
+        private AdminShellPackageEnv NewEnv(int idx)
+        {
+            var env = new AdminShellPackageEnv();
+            env.SetFilename(Path.Combine(AasxHttpContextHelper.DataPath, $"{Guid.NewGuid()}.aasx"));
+            _packages[idx] = env;
+            _packageNames[idx] = env.Filename;
+            return env;
+        }
+
+        private bool CurrentPackageAvailable(out int emptyPackageIndex)
+        {
+            emptyPackageIndex = 0;
+            if (_packages[emptyPackageIndex] == null)
+                NewEnv(emptyPackageIndex);
+            return true;
+        }
 
         private bool EmptyPackageAvailable(out int emptyPackageIndex)
         {
@@ -42,7 +62,7 @@ namespace AasxServerStandardBib.Services
                 if (_packages[envi] == null)
                 {
                     emptyPackageIndex            = envi;
-                    _packages[emptyPackageIndex] = new AdminShellPackageEnv();
+                    NewEnv(emptyPackageIndex);
                     return true;
                 }
             }
@@ -61,7 +81,7 @@ namespace AasxServerStandardBib.Services
 
         public IAssetAdministrationShell CreateAssetAdministrationShell(IAssetAdministrationShell body)
         {
-            if (EmptyPackageAvailable(out int emptyPackageIndex))
+            if (CurrentPackageAvailable(out int emptyPackageIndex))
             {
                 _packages[emptyPackageIndex].AasEnv.AssetAdministrationShells.Add(body);
                 var timeStamp = DateTime.UtcNow;
@@ -372,7 +392,7 @@ namespace AasxServerStandardBib.Services
 
         public IConceptDescription CreateConceptDescription(IConceptDescription body)
         {
-            if (EmptyPackageAvailable(out int emptyPackageIndex))
+            if (CurrentPackageAvailable(out int emptyPackageIndex))
             {
                 _packages[emptyPackageIndex].AasEnv.ConceptDescriptions.Add(body);
                 var timeStamp = DateTime.UtcNow;
@@ -547,7 +567,7 @@ namespace AasxServerStandardBib.Services
                 }
             }
 
-            if (EmptyPackageAvailable(out int emptyPackageIndex))
+            if (CurrentPackageAvailable(out int emptyPackageIndex))
             {
                 _packages[emptyPackageIndex].AasEnv.Submodels.Add(newSubmodel);
                 var timeStamp = DateTime.UtcNow;

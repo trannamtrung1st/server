@@ -16,6 +16,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using AasxServerBlazor.Configuration;
+using IO.Swagger.Controllers;
 
 namespace AasxServerBlazor;
 
@@ -42,6 +43,9 @@ public class Startup
         DependencyRegistry.Register(services);
 
         ServerConfiguration.AddFrameworkServices(services);
+
+        services.AddScoped<AssetAdministrationShellRepositoryAPIApiController>()
+            .AddScoped<SubmodelRepositoryAPIApiController>();
     }
 
     /// <summary>

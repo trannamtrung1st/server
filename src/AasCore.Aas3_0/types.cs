@@ -2863,7 +2863,7 @@ namespace AasCore.Aas3_0
             SupplementalSemanticIds    = supplementalSemanticIds;
             Qualifiers                 = qualifiers;
             EmbeddedDataSpecifications = embeddedDataSpecifications;
-            SubmodelElements           = submodelElements;
+            SubmodelElements           = submodelElements ?? new List<ISubmodelElement>();
         }
     }
 

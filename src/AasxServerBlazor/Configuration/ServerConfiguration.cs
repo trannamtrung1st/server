@@ -202,14 +202,15 @@ public static class ServerConfiguration
         services.AddMvc(options =>
                         {
                             // Remove the default System.Text.Json formatters
-                            options.InputFormatters.RemoveType<Microsoft.AspNetCore.Mvc.Formatters.SystemTextJsonInputFormatter>();
-                            options.OutputFormatters.RemoveType<Microsoft.AspNetCore.Mvc.Formatters.SystemTextJsonOutputFormatter>();
+                            // options.InputFormatters.RemoveType<Microsoft.AspNetCore.Mvc.Formatters.SystemTextJsonInputFormatter>();
+                            // options.OutputFormatters.RemoveType<Microsoft.AspNetCore.Mvc.Formatters.SystemTextJsonOutputFormatter>();
 
                             // Add custom formatters
-                            options.InputFormatters.Add(new AasRequestFormatter());
-                            options.OutputFormatters.Add(new AasResponseFormatter());
-                            options.InputFormatters.Add(new AasDescriptorRequestFormatter());
-                            options.OutputFormatters.Add(new AasDescriptorResponseFormatter());
+                            options.OutputFormatters.Insert(0, new AasDescriptorResponseFormatter());
+                            options.InputFormatters.Insert(0, new AasDescriptorRequestFormatter());
+                            options.OutputFormatters.Insert(0, new AasResponseFormatter());
+                            options.InputFormatters.Insert(0, new AasRequestFormatter());
+                            options.InputFormatters.Insert(0, new CustomRequestFormatter());
                         })
                 .AddJsonOptions(opts =>
                                 {
