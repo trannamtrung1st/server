@@ -92,8 +92,6 @@ public class AhiAssetsController(
                         DisplayName = [new LangStringNameType("en-US", addAssetDto.Name)],
                         IdShort = aasId,
                         Parent = null, // [TODO]
-                        TimeStampCreate = DateTime.UtcNow,
-                        TimeStamp = DateTime.UtcNow,
                         Submodels = []
                     };
                     aasRepoController.PostAssetAdministrationShell(aas);
@@ -108,8 +106,6 @@ public class AhiAssetsController(
                         DisplayName = [new LangStringNameType("en-US", "Properties")],
                         IdShort = aasId,
                         Kind = ModellingKind.Instance,
-                        TimeStampCreate = DateTime.UtcNow,
-                        TimeStamp = DateTime.UtcNow,
                         SubmodelElements = []
                     };
                     smRepoController.PostSubmodel(defaultSm, aasIdentifier: ConvertHelper.ToBase64(aas.Id));
@@ -189,13 +185,36 @@ public class AhiAssetsController(
                                 {
                                     DisplayName = [new LangStringNameType("en-US", attribute.Name)],
                                     IdShort = attribute.Id.ToString(),
-                                    TimeStamp = DateTime.UtcNow,
-                                    TimeStampCreate = DateTime.UtcNow,
                                     Value = attribute.Value,
-                                    Category = AttributeTypeConstants.TYPE_STATIC
+                                    Category = attribute.AttributeType
                                 };
                                 var encodedSmId = ConvertHelper.ToBase64(assetId.ToString());
                                 smRepoController.PostSubmodelElementSubmodelRepo(property, encodedSmId, first: false);
+                                break;
+                            }
+                            case AttributeTypeConstants.TYPE_ALIAS:
+                            {
+                                var aliasPayload = JObject.FromObject(attribute.Payload).ToObject<AssetAttributeAlias>();
+
+                                var aliasAasId = ConvertHelper.ToBase64(aliasPayload.AliasAssetId.ToString());
+                                var aliasAasResult = aasRepoController.GetAssetAdministrationShellById(aliasAasId) as ObjectResult;
+                                var aliasAas = aliasAasResult.Value as IAssetAdministrationShell;
+
+                                var aliasSmRef = aliasAas.Submodels.First(sm => sm.GetAsExactlyOneKey().Value == aliasAas.Id);
+                                var aliasSmRefKey = ConvertHelper.ToBase64(aliasSmRef.GetAsExactlyOneKey().Value);
+                                var aliasSmResult = smRepoController.GetSubmodelById(aliasSmRefKey, level: LevelEnum.Deep, extent: ExtentEnum.WithBlobValue) as ObjectResult;
+                                var aliasSm = aliasSmResult.Value as ISubmodel;
+                                var aliasSme = aliasSm.SubmodelElements.First(sme => sme.IdShort == aliasPayload.AliasAttributeId.ToString());
+
+                                var reference = new ReferenceElement()
+                                {
+                                    Category = attribute.AttributeType,
+                                    DisplayName = [new LangStringNameType("en-US", attribute.Name)],
+                                    IdShort = attribute.Id.ToString(),
+                                    Value = new Reference(ReferenceTypes.ModelReference, [aliasAas.ToKey(), aliasSm.ToKey(), aliasSme.ToKey()])
+                                };
+                                var encodedSmId = ConvertHelper.ToBase64(assetId.ToString());
+                                smRepoController.PostSubmodelElementSubmodelRepo(reference, encodedSmId, first: false);
                                 break;
                             }
                         }
@@ -227,23 +246,16 @@ public class AhiAssetsController(
     [HttpGet("{id}")]
     public async Task<IActionResult> GetAssetByIdAsync([FromRoute] Guid id)
     {
-        var encodedId = ConvertHelper.ToBase64(id.ToString());
-        var aasResult = aasRepoController.GetAssetAdministrationShellById(encodedId) as ObjectResult;
-        var aas = aasResult.Value as IAssetAdministrationShell;
-        var submodels = new List<ISubmodel>();
-
-        foreach (var sm in aas.Submodels)
-        {
-            var smId = ConvertHelper.ToBase64(sm.GetAsExactlyOneKey().Value);
-            var submodelResult = smRepoController.GetSubmodelById(smId, level: LevelEnum.Deep, extent: ExtentEnum.WithBlobValue) as ObjectResult;
-            var submodel = submodelResult.Value as ISubmodel;
-            submodels.Add(submodel);
-        }
-
-        var attributes = ToAttributes(submodels);
+        var (aas, _, attributes) = GetFullAasById(id);
         return Ok(ToGetAssetDto(aas, attributes));
     }
 
+    [HttpGet("{id}/fetch")]
+    public async Task<IActionResult> FetchAsync(Guid id)
+    {
+        var (aas, _, attributes) = GetFullAasById(id);
+        return Ok(ToGetAssetSimpleDto(aas, attributes));
+    }
 
     [HttpGet("{id}/snapshot")]
     public async Task<IActionResult> GetAttributeSnapshotAsync(Guid id)
@@ -262,38 +274,7 @@ public class AhiAssetsController(
 
             foreach (var sme in smeList)
             {
-                switch (sme.Category)
-                {
-                    case AttributeTypeConstants.TYPE_STATIC:
-                    {
-                        var prop = sme as IProperty;
-                        var tsDto = new TimeSeriesDto()
-                        {
-                            v = prop.Value,
-                            q = 192, // [TODO]
-                            ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                            lts = 0
-                        };
-                        var tsList = new List<TimeSeriesDto>() { tsDto };
-                        attributes.Add(new AttributeDto
-                        {
-                            GapfillFunction = PostgresFunction.TIME_BUCKET_GAPFILL,
-                            Quality = "Good [Non-Specific]", // [TODO]
-                            QualityCode = 192, // [TODO]
-                            AttributeId = Guid.Parse(prop.IdShort),
-                            AttributeName = prop.DisplayName.FirstOrDefault()?.Text ?? prop.IdShort,
-                            AttributeType = prop.Category,
-                            Uom = null, // [TODO]
-                            DecimalPlace = null, // [TODO]
-                            ThousandSeparator = null, // [TODO]
-                            Series = tsList,
-                            DataType = ToAhiDataType(prop.ValueType)
-                        });
-                        break;
-                    }
-                    default:
-                        throw new NotSupportedException();
-                }
+                attributes.Add(ToAttributeDto(sme));
             }
         }
 
@@ -349,6 +330,25 @@ public class AhiAssetsController(
         return Ok(response);
     }
 
+    private (IAssetAdministrationShell aas, List<ISubmodel> submodels, IEnumerable<AssetAttributeDto> attributes) GetFullAasById(Guid id)
+    {
+        var encodedId = ConvertHelper.ToBase64(id.ToString());
+        var aasResult = aasRepoController.GetAssetAdministrationShellById(encodedId) as ObjectResult;
+        var aas = aasResult.Value as IAssetAdministrationShell;
+        var submodels = new List<ISubmodel>();
+
+        foreach (var sm in aas.Submodels)
+        {
+            var smId = ConvertHelper.ToBase64(sm.GetAsExactlyOneKey().Value);
+            var submodelResult = smRepoController.GetSubmodelById(smId, level: LevelEnum.Deep, extent: ExtentEnum.WithBlobValue) as ObjectResult;
+            var submodel = submodelResult.Value as ISubmodel;
+            submodels.Add(submodel);
+        }
+
+        var attributes = ToAttributes(submodels);
+        return (aas, submodels, attributes);
+    }
+
     private GetAssetSimpleDto ToGetAssetSimpleDto(IAssetAdministrationShell aas, IEnumerable<AssetAttributeDto> attributes)
     {
         return new GetAssetSimpleDto()
@@ -376,6 +376,139 @@ public class AhiAssetsController(
         };
     }
 
+    private AssetAttributeDto ToAssetAttributeDto(ISubmodel sm, ISubmodelElement sme)
+    {
+        switch (sme.Category)
+        {
+            case AttributeTypeConstants.TYPE_STATIC:
+            {
+                var prop = sme as IProperty;
+                return new AssetAttributeDto
+                {
+                    AssetId = Guid.Parse(sm.Id),
+                    AttributeType = prop.Category,
+                    CreatedUtc = prop.TimeStampCreate,
+                    DataType = ToAhiDataType(prop.ValueType),
+                    DecimalPlace = null, // [TODO]
+                    Deleted = false,
+                    Id = Guid.Parse(prop.IdShort),
+                    Name = prop.DisplayName.FirstOrDefault()?.Text ?? prop.IdShort,
+                    SequentialNumber = -1, // [TODO]
+                    Value = prop.Value,
+                    Payload = JObject.FromObject(new
+                    {
+                        // templateAttributeId = sm.Administration?.TemplateId, // [NOTE] AAS doens't have
+                        value = prop.Value
+                    }).ToObject<AttributeMapping>(),
+                    ThousandSeparator = null, // [TODO]
+                    Uom = null, // [TODO]
+                    UomId = null, // [TODO]
+                    UpdatedUtc = prop.TimeStamp
+                };
+            }
+            case AttributeTypeConstants.TYPE_ALIAS:
+            {
+                var reference = sme as IReferenceElement;
+                var (aliasAas, aliasSme) = GetAliasSme(reference);
+                var aliasDto = ToAssetAttributeDto(sm, aliasSme);
+                return new AssetAttributeDto
+                {
+                    AssetId = Guid.Parse(sm.Id),
+                    AttributeType = reference.Category,
+                    CreatedUtc = reference.TimeStampCreate,
+                    DataType = aliasDto.DataType,
+                    DecimalPlace = aliasDto.DecimalPlace,
+                    Deleted = false,
+                    Id = Guid.Parse(reference.IdShort),
+                    Name = reference.DisplayName.FirstOrDefault()?.Text ?? reference.IdShort,
+                    SequentialNumber = -1, // [TODO]
+                    Value = aliasDto.Value,
+                    Payload = JObject.FromObject(new
+                    {
+                        id = reference.IdShort,
+                        aliasAssetId = aliasDto.AssetId,
+                        aliasAttributeId = Guid.Parse(aliasSme.IdShort),
+                        aliasAssetName = aliasAas.DisplayName.FirstOrDefault()?.Text ?? aliasAas.IdShort,
+                        aliasAttributeName = aliasSme.DisplayName.FirstOrDefault()?.Text ?? aliasSme.IdShort,
+                    }).ToObject<AttributeMapping>(),
+                    ThousandSeparator = aliasDto.ThousandSeparator,
+                    Uom = aliasDto.Uom,
+                    UomId = aliasDto.UomId,
+                    UpdatedUtc = reference.TimeStamp
+                };
+            }
+            default:
+                throw new NotSupportedException();
+        }
+    }
+
+    private (IAssetAdministrationShell Aas, ISubmodelElement Sme) GetAliasSme(IReferenceElement reference)
+    {
+        var aasId = ConvertHelper.ToBase64(reference.Value.Keys[0].Value);
+        var aasResult = aasRepoController.GetAssetAdministrationShellById(aasId) as ObjectResult;
+        var aliasAas = aasResult.Value as IAssetAdministrationShell;
+        var smId = ConvertHelper.ToBase64(reference.Value.Keys[1].Value);
+        var smeIdPath = reference.Value.Keys[2].Value;
+        var smeResult = smRepoController.GetSubmodelElementByPathSubmodelRepo(smId, smeIdPath, LevelEnum.Deep, ExtentEnum.WithoutBlobValue) as ObjectResult;
+        var aliasSme = smeResult.Value as ISubmodelElement;
+        return (aliasAas, aliasSme);
+    }
+
+    private AttributeDto ToAttributeDto(ISubmodelElement sme)
+    {
+        switch (sme.Category)
+        {
+            case AttributeTypeConstants.TYPE_STATIC:
+            {
+                var prop = sme as IProperty;
+                var tsDto = new TimeSeriesDto()
+                {
+                    v = prop.Value,
+                    q = 192, // [TODO]
+                    ts = 0, // [NOTE] TimeStamp is not serialized
+                    lts = 0
+                };
+                var tsList = new List<TimeSeriesDto>() { tsDto };
+                return new AttributeDto
+                {
+                    GapfillFunction = PostgresFunction.TIME_BUCKET_GAPFILL,
+                    Quality = "Good [Non-Specific]", // [TODO]
+                    QualityCode = 192, // [TODO]
+                    AttributeId = Guid.Parse(prop.IdShort),
+                    AttributeName = prop.DisplayName.FirstOrDefault()?.Text ?? prop.IdShort,
+                    AttributeType = prop.Category,
+                    Uom = null, // [TODO]
+                    DecimalPlace = null, // [TODO]
+                    ThousandSeparator = null, // [TODO]
+                    Series = tsList,
+                    DataType = ToAhiDataType(prop.ValueType)
+                };
+            }
+            case AttributeTypeConstants.TYPE_ALIAS:
+            {
+                var reference = sme as IReferenceElement;
+                var (_, aliasSme) = GetAliasSme(reference);
+                var aliasAttrDto = ToAttributeDto(aliasSme);
+                return new AttributeDto
+                {
+                    GapfillFunction = aliasAttrDto.GapfillFunction,
+                    Quality = aliasAttrDto.Quality,
+                    QualityCode = aliasAttrDto.QualityCode,
+                    AttributeId = Guid.Parse(reference.IdShort),
+                    AttributeName = reference.DisplayName.FirstOrDefault()?.Text ?? reference.IdShort,
+                    AttributeType = reference.Category,
+                    Uom = aliasAttrDto.Uom,
+                    DecimalPlace = aliasAttrDto.DecimalPlace,
+                    ThousandSeparator = aliasAttrDto.ThousandSeparator,
+                    Series = aliasAttrDto.Series,
+                    DataType = aliasAttrDto.DataType
+                };
+            }
+            default:
+                throw new NotSupportedException();
+        }
+    }
+
     private GetAssetDto ToGetAssetDto(IAssetAdministrationShell aas, IEnumerable<AssetAttributeDto> assetAttributes)
     {
         return ToGetAssetSimpleDto(aas, assetAttributes);
@@ -388,38 +521,7 @@ public class AhiAssetsController(
         {
             foreach (var sme in sm.SubmodelElements)
             {
-                switch (sme.Category)
-                {
-                    case AttributeTypeConstants.TYPE_STATIC:
-                    {
-                        var prop = sme as IProperty;
-                        attributes.Add(new AssetAttributeDto
-                        {
-                            AssetId = Guid.Parse(sm.Id),
-                            AttributeType = prop.Category,
-                            CreatedUtc = prop.TimeStampCreate,
-                            DataType = ToAhiDataType(prop.ValueType),
-                            DecimalPlace = null, // [TODO]
-                            Deleted = false,
-                            Id = Guid.Parse(prop.IdShort),
-                            Name = prop.DisplayName.FirstOrDefault()?.Text ?? prop.IdShort,
-                            SequentialNumber = -1, // [TODO]
-                            Value = prop.Value,
-                            Payload = JObject.FromObject(new
-                            {
-                                // TemplateAttributeId = sm.Administration?.TemplateId, // [NOTE] AAS doens't have
-                                prop.Value
-                            }).ToObject<AttributeMapping>(),
-                            ThousandSeparator = null, // [TODO]
-                            Uom = null, // [TODO]
-                            UomId = null, // [TODO]
-                            UpdatedUtc = prop.TimeStamp
-                        });
-                        break;
-                    }
-                    default:
-                        throw new NotSupportedException();
-                }
+                attributes.Add(ToAssetAttributeDto(sm, sme));
             }
         }
         return attributes;
