@@ -32,9 +32,6 @@
         </PackageReference>
         <PackageReference Include="ScottPlot" Version="4.1.74" />
         <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
-        <PackageReference Include="AHI.Infrastructure.Service" Version="2.1.5-rc39" />
-        <PackageReference Include="AHI.Infrastructure.Service.Dapper" Version="2.1.5-rc39" />
-        <PackageReference Include="AHI.Infrastructure.Audit" Version="2.1.5-rc39" />
     </ItemGroup>
 
     <ItemGroup>

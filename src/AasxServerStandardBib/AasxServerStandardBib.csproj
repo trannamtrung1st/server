@@ -45,6 +45,9 @@
         <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="7.6.2"/>
         <PackageReference Include="System.Security.Permissions" Version="8.0.0" />
         <PackageReference Include="System.ServiceModel.Primitives" Version="8.0.0" />
+        <PackageReference Include="AHI.Infrastructure.Service" Version="2.1.5-rc39" />
+        <PackageReference Include="AHI.Infrastructure.Service.Dapper" Version="2.1.5-rc39" />
+        <PackageReference Include="AHI.Infrastructure.Audit" Version="2.1.5-rc39" />
     </ItemGroup>
 
     <ItemGroup>
