@@ -2,10 +2,13 @@ namespace IO.Swagger.Lib.V3.Controllers;
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
 using AasxServer;
+using AasxServerStandardBib;
 using AasxServerStandardBib.Models;
+using AasxServerStandardBib.Services;
 using AasxServerStandardBib.Utils;
 using AHI.Infrastructure.Audit.Constant;
 using AHI.Infrastructure.SharedKernel.Extension;
@@ -24,7 +27,8 @@ using Newtonsoft.Json.Linq;
 public class AhiAssetsController(
     AssetAdministrationShellRepositoryAPIApiController aasRepoController,
     SubmodelRepositoryAPIApiController smRepoController,
-    RuntimeAssetAttributeHandler runtimeAssetAttributeHandler
+    RuntimeAssetAttributeHandler runtimeAssetAttributeHandler,
+    EventPublisher eventPublisher
 ) : ControllerBase
 {
     [HttpPost("search")]
@@ -251,7 +255,7 @@ public class AhiAssetsController(
                                     property.DisplayName = [new LangStringNameType("en-US", updateAttribute.Name)];
                                     property.Value = updateAttribute.Value;
                                     smRepoController.PutSubmodelElementByPathSubmodelRepo(property, smId, smeIdPath, level: LevelEnum.Deep);
-                                    // [TODO] publish event
+                                    await eventPublisher.Publish(AasEvents.SubmodelElementUpdated, property);
                                     break;
                                 }
                             }
@@ -424,28 +428,29 @@ public class AhiAssetsController(
         {
             case AttributeTypeConstants.TYPE_STATIC:
             {
-                var prop = sme as IProperty;
+                var snapshot = sme as IProperty;
+                var dataType = MappingHelper.ToAhiDataType(snapshot.ValueType);
                 return new AssetAttributeDto
                 {
                     AssetId = Guid.Parse(sm.Id),
-                    AttributeType = prop.Category,
-                    CreatedUtc = prop.TimeStampCreate,
-                    DataType = MappingHelper.ToAhiDataType(prop.ValueType),
+                    AttributeType = snapshot.Category,
+                    CreatedUtc = snapshot.TimeStampCreate,
+                    DataType = dataType,
                     DecimalPlace = null, // [TODO]
                     Deleted = false,
-                    Id = Guid.Parse(prop.IdShort),
-                    Name = prop.DisplayName.FirstOrDefault()?.Text ?? prop.IdShort,
+                    Id = Guid.Parse(snapshot.IdShort),
+                    Name = snapshot.DisplayName.FirstOrDefault()?.Text ?? snapshot.IdShort,
                     SequentialNumber = -1, // [TODO]
-                    Value = prop.Value,
+                    Value = snapshot?.Value.ParseValueWithDataType(dataType, snapshot.Value, isRawData: false),
                     Payload = JObject.FromObject(new
                     {
                         // templateAttributeId = sm.Administration?.TemplateId, // [NOTE] AAS doens't have
-                        value = prop.Value
+                        value = snapshot.Value
                     }).ToObject<AttributeMapping>(),
                     ThousandSeparator = null, // [TODO]
                     Uom = null, // [TODO]
                     UomId = null, // [TODO]
-                    UpdatedUtc = prop.TimeStamp
+                    UpdatedUtc = snapshot.TimeStamp
                 };
             }
             case AttributeTypeConstants.TYPE_ALIAS:
@@ -484,14 +489,12 @@ public class AhiAssetsController(
             case AttributeTypeConstants.TYPE_RUNTIME:
             {
                 var smc = sme as ISubmodelElementCollection;
-                var snapshot = smc.Value.FindFirstIdShort("Snapshot") as IProperty;
-                var extensions = smc.Extensions;
-                var triggerAttributeIdStr = extensions.FirstOrDefault(e => e.Name == nameof(AssetAttributeRuntime.TriggerAttributeId))?.Value;
+                var triggerAttributeIdStr = smc.FindFirstIdShortAs<IProperty>(nameof(AssetAttributeRuntime.TriggerAttributeId))?.Value;
                 Guid? triggerAttributeId = triggerAttributeIdStr != null ? Guid.Parse(triggerAttributeIdStr) : null;
-                var triggerAttributeIds = extensions.FirstOrDefault(e => e.Name == nameof(AssetAttributeRuntime.TriggerAttributeIds))?.Value;
-                var enabledExpression = extensions.FirstOrDefault(e => e.Name == nameof(AssetAttributeRuntime.EnabledExpression))?.Value;
-                var expression = extensions.FirstOrDefault(e => e.Name == nameof(AssetAttributeRuntime.Expression))?.Value;
-                var expressionCompile = extensions.FirstOrDefault(e => e.Name == nameof(AssetAttributeRuntime.ExpressionCompile))?.Value;
+                var triggerAttributeIds = smc.FindFirstIdShortAs<IProperty>(nameof(AssetAttributeRuntime.TriggerAttributeIds))?.Value;
+                var enabledExpression = smc.FindFirstIdShortAs<IProperty>(nameof(AssetAttributeRuntime.EnabledExpression))?.Value;
+                var expression = smc.FindFirstIdShortAs<IProperty>(nameof(AssetAttributeRuntime.Expression))?.Value;
+                var expressionCompile = smc.FindFirstIdShortAs<IProperty>(nameof(AssetAttributeRuntime.ExpressionCompile))?.Value;
                 AttributeMapping payload;
 
                 {
@@ -516,18 +519,21 @@ public class AhiAssetsController(
                     }).ToObject<AttributeMapping>();
                 }
 
+                var snapshotSmc = smc.FindFirstIdShortAs<ISubmodelElementCollection>("Snapshot");
+                var snapshot = snapshotSmc.FindFirstIdShortAs<IProperty>("Value");
+                var dataType = smc.FindFirstIdShortAs<IProperty>("DataType").Value;
                 return new AssetAttributeDto
                 {
                     AssetId = Guid.Parse(sm.Id),
                     AttributeType = smc.Category,
                     CreatedUtc = smc.TimeStampCreate,
-                    DataType = MappingHelper.ToAhiDataType(snapshot.ValueType),
+                    DataType = dataType,
                     DecimalPlace = null, // [TODO]
                     Deleted = false,
                     Id = Guid.Parse(smc.IdShort),
                     Name = smc.DisplayName.FirstOrDefault()?.Text ?? smc.IdShort,
                     SequentialNumber = -1, // [TODO]
-                    Value = snapshot.Value,
+                    Value = snapshot?.Value.ParseValueWithDataType(dataType, snapshot.Value, isRawData: false),
                     Payload = payload,
                     ThousandSeparator = null, // [TODO]
                     Uom = null, // [TODO]
@@ -563,16 +569,18 @@ public class AhiAssetsController(
         return (aliasAas, smId, aliasSme);
     }
 
-    private AttributeDto ToAttributeDto(ISubmodelElement sme)
+    [ApiExplorerSettings(IgnoreApi = true)]
+    public AttributeDto ToAttributeDto(ISubmodelElement sme)
     {
         switch (sme.Category)
         {
             case AttributeTypeConstants.TYPE_STATIC:
             {
-                var prop = sme as IProperty;
+                var snapshot = sme as IProperty;
+                var dataType = MappingHelper.ToAhiDataType(snapshot.ValueType);
                 var tsDto = new TimeSeriesDto()
                 {
-                    v = prop.Value,
+                    v = snapshot.Value.ParseValueWithDataType(dataType, snapshot.Value, isRawData: false),
                     q = 192, // [TODO]
                     ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), // [NOTE] TimeStamp is not serialized
                     lts = 0
@@ -583,14 +591,14 @@ public class AhiAssetsController(
                     GapfillFunction = PostgresFunction.TIME_BUCKET_GAPFILL,
                     Quality = "Good [Non-Specific]", // [TODO]
                     QualityCode = 192, // [TODO]
-                    AttributeId = Guid.Parse(prop.IdShort),
-                    AttributeName = prop.DisplayName.FirstOrDefault()?.Text ?? prop.IdShort,
-                    AttributeType = prop.Category,
+                    AttributeId = Guid.Parse(snapshot.IdShort),
+                    AttributeName = snapshot.DisplayName.FirstOrDefault()?.Text ?? snapshot.IdShort,
+                    AttributeType = snapshot.Category,
                     Uom = null, // [TODO]
                     DecimalPlace = null, // [TODO]
                     ThousandSeparator = null, // [TODO]
                     Series = tsList,
-                    DataType = MappingHelper.ToAhiDataType(prop.ValueType)
+                    DataType = dataType
                 };
             }
             case AttributeTypeConstants.TYPE_ALIAS:
@@ -618,15 +626,22 @@ public class AhiAssetsController(
             case AttributeTypeConstants.TYPE_RUNTIME:
             {
                 var smc = sme as ISubmodelElementCollection;
-                var snapshot = smc.Value.FindFirstIdShort("Snapshot") as IProperty;
-                var tsDto = new TimeSeriesDto()
+                var tsList = new List<TimeSeriesDto>();
+                var snapshotSmc = smc.FindFirstIdShortAs<ISubmodelElementCollection>("Snapshot");
+                var dataType = smc.FindFirstIdShortAs<IProperty>("DataType").Value;
+                if (snapshotSmc.Value is not null)
                 {
-                    v = snapshot.Value,
-                    q = 192, // [TODO]
-                    ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), // [NOTE] TimeStamp is not serialized
-                    lts = 0
-                };
-                var tsList = new List<TimeSeriesDto>() { tsDto };
+                    var snapshotValue = snapshotSmc.FindFirstIdShortAs<IProperty>("Value");
+                    var timestamp = snapshotSmc.FindFirstIdShortAs<IProperty>("Timestamp");
+                    var tsDto = new TimeSeriesDto()
+                    {
+                        v = snapshotValue.Value.ParseValueWithDataType(dataType, snapshotValue.Value, isRawData: false),
+                        q = 192, // [TODO]
+                        ts = long.Parse(timestamp.Value, CultureInfo.InvariantCulture),
+                        lts = 0
+                    };
+                    tsList.Add(tsDto);
+                }
                 return new AttributeDto
                 {
                     GapfillFunction = PostgresFunction.TIME_BUCKET_GAPFILL,
@@ -639,7 +654,7 @@ public class AhiAssetsController(
                     DecimalPlace = null, // [TODO]
                     ThousandSeparator = null, // [TODO]
                     Series = tsList,
-                    DataType = MappingHelper.ToAhiDataType(snapshot.ValueType)
+                    DataType = dataType
                 };
             }
             default:

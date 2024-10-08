@@ -40,7 +40,17 @@ namespace AasxServer
 {
     using System.Text.Json;
     using System.Text.Json.Serialization;
+    using AasxServerStandardBib.EventHandlers.Abstracts;
+
     using AasxTimeSeries;
+    using Microsoft.AspNetCore.Builder;
+    using Microsoft.AspNetCore.Hosting;
+    using Microsoft.Extensions.DependencyInjection;
+    using Microsoft.Extensions.Hosting;
+
+
+
+
 
     /// <summary>
     /// Checks whether the console will persist after the program exits.
@@ -65,6 +75,14 @@ namespace AasxServer
     public static class Program
     {
         public static IConfiguration con { get; set; }
+
+        public static async Task StartEventHandlers(IHost host)
+        {
+            var eventHandlers = host.Services.GetRequiredService<IEnumerable<IEventHandler>>();
+
+            foreach (var eventHandler in eventHandlers)
+                await eventHandler.Start();
+        }
 
         public static string getBetween(AdminShellPackageEnv env, string strStart, string strEnd)
         {
@@ -317,6 +335,16 @@ namespace AasxServer
 
         public static void  changeDataVersion() { dataVersion++; }
         public static ulong getDataVersion()    { return (dataVersion); }
+
+        public static IEnumerable<IAssetAdministrationShell> AllAas()
+        {
+            return env[0].AasEnv.AssetAdministrationShells;
+        }
+
+        public static IEnumerable<ISubmodel> AllSubmodels()
+        {
+            return env[0].AasEnv.Submodels;
+        }
 
         static Dictionary<string, SampleClient.UASampleClient> OPCClients = new Dictionary<string, SampleClient.UASampleClient>();
         static readonly object opcclientAddLock = new object(); // object for lock around connecting to an external opc server
@@ -1113,10 +1141,11 @@ namespace AasxServer
                 }
             }
 
-            if (a.Mqtt)
-            {
-                AASMqttServer.MqttSeverStopAsync().Wait();
-            }
+            // [NOTE]
+            // if (a.Mqtt)
+            // {
+            //     AASMqttServer.MqttSeverStopAsync().Wait();
+            // }
 
             AasxRestServer.Stop();
 

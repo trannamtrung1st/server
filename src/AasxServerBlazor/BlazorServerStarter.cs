@@ -18,6 +18,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using System;
 using System.IO;
+using System.Threading.Tasks;
 
 namespace AasxServerBlazor;
 
@@ -29,16 +30,17 @@ public static class BlazorServerStarter
     private const string DefaultUrl = $"http://*:{DefaultPort}";
     private const char KestrelUrlSeparator = ':';
 
-    public static void Main(string[] args)
+    public static async Task Main(string[] args)
     {
         var config = LoadConfiguration();
         var host   = BuildHost(args, config);
 
-        host.RunAsync();
-
         InitializeProgram(args, config);
+        await Program.StartEventHandlers(host);
 
-        host.WaitForShutdownAsync();
+        await host.RunAsync();
+
+        await host.WaitForShutdownAsync();
     }
 
     private static void InitializeProgram(string[] args, IConfiguration config)

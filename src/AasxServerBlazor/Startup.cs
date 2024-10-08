@@ -16,10 +16,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using AasxServerBlazor.Configuration;
-using IO.Swagger.Controllers;
-using IO.Swagger.Lib.V3.Controllers;
-using IO.Swagger.Lib.V3.Services;
-
+using IO.Swagger.Lib.V3;
 namespace AasxServerBlazor;
 
 public class Startup
@@ -46,11 +43,7 @@ public class Startup
 
         ServerConfiguration.AddFrameworkServices(services);
 
-        services
-            .AddScoped<RuntimeAssetAttributeHandler>()
-            .AddScoped<AhiAssetsController>()
-            .AddScoped<AssetAdministrationShellRepositoryAPIApiController>()
-            .AddScoped<SubmodelRepositoryAPIApiController>();
+        StartupHelper.AddAhiServices(services);
     }
 
     /// <summary>

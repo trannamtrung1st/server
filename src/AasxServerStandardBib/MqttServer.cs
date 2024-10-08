@@ -23,7 +23,8 @@ namespace AasxMqttServer
         public async Task MqttSeverStartAsync()
         {
             //Start a MQTT server.
-            await mqttServer.StartAsync(new MqttServerOptions());
+            await mqttServer.StartAsync(new MqttServerOptionsBuilder()
+                .Build());
         }
 
         public async Task MqttSeverStopAsync()

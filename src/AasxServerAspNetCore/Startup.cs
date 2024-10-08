@@ -24,6 +24,7 @@ using AasxServerStandardBib.Logging;
 using AasxServerStandardBib.Services;
 using AdminShellNS;
 using IO.Swagger.Controllers;
+using IO.Swagger.Lib.V3;
 using IO.Swagger.Lib.V3.Formatters;
 using IO.Swagger.Lib.V3.Interfaces;
 using IO.Swagger.Lib.V3.Middleware;
@@ -109,6 +110,8 @@ internal class Startup
         services.AddTransient<ISubmodelPropertyExtractionService, SubmodelPropertyExtractionService>();
         services.AddTransient<ISubmodelService, SubmodelService>();
         services.AddTransient<IValueOnlyJsonDeserializer, ValueOnlyJsonDeserializer>();
+
+        StartupHelper.AddAhiServices(services);
 
         // Add GraphQL services
         services

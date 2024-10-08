@@ -25,6 +25,8 @@ var host = CreateHostBuilder(args).Build();
 
 AasxServer.Program.Main(args);
 SecurityHelper.SecurityInit();
+await AasxServer.Program.StartEventHandlers(host);
+
 await host.RunAsync();
 await host.WaitForShutdownAsync();
 

@@ -15,11 +15,14 @@ using Microsoft.CodeAnalysis.CSharp.Scripting;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System.Globalization;
+using AasxServerStandardBib.Services;
+using AasxServerStandardBib;
 
 namespace IO.Swagger.Lib.V3.Services;
 
 public class RuntimeAssetAttributeHandler(
-    ILogger<RuntimeAssetAttributeHandler> logger)
+    ILogger<RuntimeAssetAttributeHandler> logger,
+    EventPublisher eventPublisher)
 {
     private AhiAssetsController _ahiAssetsController;
     private SubmodelRepositoryAPIApiController _smRepoController;
@@ -38,7 +41,6 @@ public class RuntimeAssetAttributeHandler(
             DisplayName = [new LangStringNameType("en-US", attribute.Name)],
             IdShort = attribute.Id.ToString(),
             Category = attribute.AttributeType,
-            Extensions = [],
             Value = []
         };
 
@@ -50,6 +52,8 @@ public class RuntimeAssetAttributeHandler(
 
         var encodedSmId = ConvertHelper.ToBase64(attribute.AssetId.ToString());
         _smRepoController.PostSubmodelElementSubmodelRepo(smc, encodedSmId, first: false);
+
+        await eventPublisher.Publish(AasEvents.SubmodelElementUpdated, smc);
     }
 
     private async Task ValidateRuntimeAttribute(ISubmodelElementCollection smc, IAssetAdministrationShell? aas, IEnumerable<ISubmodelElement> currentSmeList, AssetAttributeCommand attribute, IEnumerable<AssetAttributeCommand> inputAttributes, AssetAttributeRuntime runtimePayload)
@@ -101,27 +105,27 @@ public class RuntimeAssetAttributeHandler(
         runtimePayload.ExpressionCompile = expression;
         var triggers = CreateRuntimeTriggers(runtimePayload, matchedAttributes, inputAttributes.Select(x => x.Id).Distinct());
 
-        smc.Extensions.AddRange([
-            new Extension(name: nameof(runtimePayload.Expression), valueType: DataTypeDefXsd.String, value: runtimePayload.Expression),
-            new Extension(name: nameof(runtimePayload.ExpressionCompile), valueType: DataTypeDefXsd.String, value: runtimePayload.ExpressionCompile),
-            new Extension(name: nameof(runtimePayload.EnabledExpression), valueType: DataTypeDefXsd.Boolean, value: runtimePayload.EnabledExpression.ToString().ToLower(CultureInfo.InvariantCulture)),
-            new Extension(name: nameof(runtimePayload.TriggerAttributeIds), valueType: DataTypeDefXsd.String, value: JsonConvert.SerializeObject(triggers)) // [NOTE] temp
+        smc.Value.AddRange([
+            new Property(valueType: DataTypeDefXsd.String, idShort: "DataType", displayName: [new LangStringNameType("en-US", "DataType")], value: attribute.DataType),
+            new Property(valueType: DataTypeDefXsd.String, idShort: nameof(runtimePayload.Expression), displayName: [new LangStringNameType("en-US", nameof(runtimePayload.Expression))], value: runtimePayload.Expression),
+            new Property(valueType: DataTypeDefXsd.String, idShort: nameof(runtimePayload.ExpressionCompile), displayName: [new LangStringNameType("en-US", nameof(runtimePayload.ExpressionCompile))], value: runtimePayload.ExpressionCompile),
+            new Property(valueType: DataTypeDefXsd.Boolean, idShort: nameof(runtimePayload.EnabledExpression), displayName: [new LangStringNameType("en-US", nameof(runtimePayload.EnabledExpression))], value: runtimePayload.EnabledExpression.ToString().ToLower(CultureInfo.InvariantCulture)),
+            new Property(valueType: DataTypeDefXsd.String, idShort: nameof(runtimePayload.TriggerAttributeIds), displayName: [new LangStringNameType("en-US", nameof(runtimePayload.TriggerAttributeIds))], value: JsonConvert.SerializeObject(triggers)) // [NOTE] temp
         ]);
 
         if (runtimePayload.TriggerAttributeId.HasValue)
-            smc.Extensions.Add(new Extension(name: nameof(runtimePayload.TriggerAttributeId), valueType: DataTypeDefXsd.String, value: runtimePayload.TriggerAttributeId.ToString()));
+            smc.Value.Add(new Property(valueType: DataTypeDefXsd.String, idShort: nameof(runtimePayload.TriggerAttributeId), displayName: [new LangStringNameType("en-US", nameof(runtimePayload.TriggerAttributeId))], value: runtimePayload.TriggerAttributeId.ToString()));
 
-        smc.Value.Add(new Property(valueType: MappingHelper.ToAasDataType(attribute.DataType))
+        smc.Value.Add(new SubmodelElementCollection()
         {
             DisplayName = [new LangStringNameType("en-US", "Snapshot")],
-            IdShort = "Snapshot",
-            Value = attribute.Value
+            IdShort = "Snapshot"
         });
 
         smc.Value.Add(new SubmodelElementList(AasSubmodelElements.SubmodelElementCollection)
         {
-            DisplayName = [new LangStringNameType("en-US", "Series")],
-            IdShort = "Series",
+            DisplayName = [new LangStringNameType("en-US", "SeriesData")],
+            IdShort = "SeriesData",
             OrderRelevant = true,
             Value = []
         });
