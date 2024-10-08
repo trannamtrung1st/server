@@ -173,6 +173,7 @@ public class AhiAssetsController(
                 switch (operation.op)
                 {
                     case PatchActionConstants.ADD:
+                    {
                         var attribute = operation.value.ToJson().FromJson<AssetAttributeCommand>();
                         attribute.Id = Guid.NewGuid();
                         attribute.AssetId = assetId;
@@ -228,9 +229,36 @@ public class AhiAssetsController(
                             }
                         }
                         break;
-
+                    }
                     case PatchActionConstants.EDIT:
+                    {
+                        path = operation.path.Replace("/", "");
+                        if (Guid.TryParse(path, out attributeId))
+                        {
+                            var updateAttribute = operation.value.ToJson().FromJson<AssetAttributeCommand>();
+                            updateAttribute.AssetId = assetId;
+                            updateAttribute.Id = attributeId;
+                            updateAttribute.DecimalPlace = GetAttributeDecimalPlace(updateAttribute);
+
+                            switch (updateAttribute.AttributeType)
+                            {
+                                case AttributeTypeConstants.TYPE_STATIC:
+                                {
+                                    var smId = ConvertHelper.ToBase64(assetId.ToString());
+                                    var smeIdPath = updateAttribute.Id.ToString();
+                                    var smeResult = smRepoController.GetSubmodelElementByPathSubmodelRepo(smId, smeIdPath, LevelEnum.Deep, ExtentEnum.WithoutBlobValue) as ObjectResult;
+                                    var property = smeResult.Value as IProperty;
+                                    property.DisplayName = [new LangStringNameType("en-US", updateAttribute.Name)];
+                                    property.Value = updateAttribute.Value;
+                                    smRepoController.PutSubmodelElementByPathSubmodelRepo(property, smId, smeIdPath, level: LevelEnum.Deep);
+                                    // [TODO] publish event
+                                    break;
+                                }
+                            }
+
+                        }
                         break;
+                    }
 
                     case PatchActionConstants.EDIT_TEMPLATE:
                         break;
