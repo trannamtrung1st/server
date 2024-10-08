@@ -1,8 +1,10 @@
 using System.Collections.Generic;
 using Device.Application.Asset.Command.Model;
+using Microsoft.AspNetCore.Mvc.ModelBinding.Validation;
 
 namespace AasxServerStandardBib.Models
 {
+    [ValidateNever]
     public class ValidateAssetAttributeList
     {
         public ValidationType ValidationType { get; set; } = ValidationType.Asset;

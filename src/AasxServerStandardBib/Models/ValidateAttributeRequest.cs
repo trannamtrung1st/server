@@ -1,7 +1,9 @@
 using System;
+using Microsoft.AspNetCore.Mvc.ModelBinding.Validation;
 
 namespace AasxServerStandardBib.Models
 {
+    [ValidateNever]
     public class ValidatAttributeRequest
     {
         public string MetricKey { get; set; }

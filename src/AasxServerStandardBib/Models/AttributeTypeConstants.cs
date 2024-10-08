@@ -1,7 +1,6 @@
 
 namespace AasxServerStandardBib.Models
 {
-
     public static class AttributeTypeConstants
     {
         public const string TYPE_STATIC = "static";

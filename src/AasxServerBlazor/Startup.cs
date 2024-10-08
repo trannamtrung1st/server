@@ -17,6 +17,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using AasxServerBlazor.Configuration;
 using IO.Swagger.Controllers;
+using IO.Swagger.Lib.V3.Controllers;
+using IO.Swagger.Lib.V3.Services;
 
 namespace AasxServerBlazor;
 
@@ -44,7 +46,10 @@ public class Startup
 
         ServerConfiguration.AddFrameworkServices(services);
 
-        services.AddScoped<AssetAdministrationShellRepositoryAPIApiController>()
+        services
+            .AddScoped<RuntimeAssetAttributeHandler>()
+            .AddScoped<AhiAssetsController>()
+            .AddScoped<AssetAdministrationShellRepositoryAPIApiController>()
             .AddScoped<SubmodelRepositoryAPIApiController>();
     }
 

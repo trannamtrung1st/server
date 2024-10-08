@@ -12,16 +12,19 @@ using AHI.Infrastructure.SharedKernel.Extension;
 using AHI.Infrastructure.SharedKernel.Model;
 using Extensions;
 using IO.Swagger.Controllers;
+using IO.Swagger.Lib.V3.Services;
 using IO.Swagger.Models;
 using Microsoft.AspNetCore.JsonPatch;
 using Microsoft.AspNetCore.Mvc;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 [ApiController]
 [Route("dev/assets")]
 public class AhiAssetsController(
     AssetAdministrationShellRepositoryAPIApiController aasRepoController,
-    SubmodelRepositoryAPIApiController smRepoController
+    SubmodelRepositoryAPIApiController smRepoController,
+    RuntimeAssetAttributeHandler runtimeAssetAttributeHandler
 ) : ControllerBase
 {
     [HttpPost("search")]
@@ -181,7 +184,7 @@ public class AhiAssetsController(
                             case AttributeTypeConstants.TYPE_STATIC:
                             {
                                 var property = new Property(
-                                    valueType: ToAasDataType(attribute.DataType))
+                                    valueType: MappingHelper.ToAasDataType(attribute.DataType))
                                 {
                                     DisplayName = [new LangStringNameType("en-US", attribute.Name)],
                                     IdShort = attribute.Id.ToString(),
@@ -219,7 +222,8 @@ public class AhiAssetsController(
                             }
                             case AttributeTypeConstants.TYPE_RUNTIME:
                             {
-                                var runtimePayload = JObject.FromObject(attribute.Payload).ToObject<AssetAttributeRuntime>();
+                                runtimeAssetAttributeHandler.SetControllers(ahiAssetsController: this, smRepoController);
+                                await runtimeAssetAttributeHandler.AddAttributeAsync(attribute, inputAttributes, cancellationToken: default);
                                 break;
                             }
                         }
@@ -251,14 +255,16 @@ public class AhiAssetsController(
     [HttpGet("{id}")]
     public async Task<IActionResult> GetAssetByIdAsync([FromRoute] Guid id)
     {
-        var (aas, _, attributes) = GetFullAasById(id);
+        var (aas, submodels, _) = GetFullAasById(id);
+        var attributes = ToAttributes(submodels);
         return Ok(ToGetAssetDto(aas, attributes));
     }
 
     [HttpGet("{id}/fetch")]
     public async Task<IActionResult> FetchAsync(Guid id)
     {
-        var (aas, _, attributes) = GetFullAasById(id);
+        var (aas, submodels, _) = GetFullAasById(id);
+        var attributes = ToAttributes(submodels);
         return Ok(ToGetAssetSimpleDto(aas, attributes));
     }
 
@@ -279,7 +285,9 @@ public class AhiAssetsController(
 
             foreach (var sme in smeList)
             {
-                attributes.Add(ToAttributeDto(sme));
+                var attr = ToAttributeDto(sme);
+                if (attr is not null)
+                    attributes.Add(attr);
             }
         }
 
@@ -335,7 +343,8 @@ public class AhiAssetsController(
         return Ok(response);
     }
 
-    private (IAssetAdministrationShell aas, List<ISubmodel> submodels, IEnumerable<AssetAttributeDto> attributes) GetFullAasById(Guid id)
+    [ApiExplorerSettings(IgnoreApi = true)]
+    public (IAssetAdministrationShell aas, List<ISubmodel> submodels, IEnumerable<ISubmodelElement> elements) GetFullAasById(Guid id)
     {
         var encodedId = ConvertHelper.ToBase64(id.ToString());
         var aasResult = aasRepoController.GetAssetAdministrationShellById(encodedId) as ObjectResult;
@@ -350,8 +359,8 @@ public class AhiAssetsController(
             submodels.Add(submodel);
         }
 
-        var attributes = ToAttributes(submodels);
-        return (aas, submodels, attributes);
+        var elements = submodels.SelectMany(sm => sm.SubmodelElements).ToArray();
+        return (aas, submodels, elements);
     }
 
     private GetAssetSimpleDto ToGetAssetSimpleDto(IAssetAdministrationShell aas, IEnumerable<AssetAttributeDto> attributes)
@@ -393,7 +402,7 @@ public class AhiAssetsController(
                     AssetId = Guid.Parse(sm.Id),
                     AttributeType = prop.Category,
                     CreatedUtc = prop.TimeStampCreate,
-                    DataType = ToAhiDataType(prop.ValueType),
+                    DataType = MappingHelper.ToAhiDataType(prop.ValueType),
                     DecimalPlace = null, // [TODO]
                     Deleted = false,
                     Id = Guid.Parse(prop.IdShort),
@@ -414,8 +423,10 @@ public class AhiAssetsController(
             case AttributeTypeConstants.TYPE_ALIAS:
             {
                 var reference = sme as IReferenceElement;
-                var (aliasAas, aliasSme) = GetAliasSme(reference);
+                var (aliasAas, _, aliasSme) = GetRootAliasSme(reference);
                 var aliasDto = ToAssetAttributeDto(sm, aliasSme);
+                if (aliasDto is null)
+                    return null;
                 return new AssetAttributeDto
                 {
                     AssetId = Guid.Parse(sm.Id),
@@ -444,23 +455,84 @@ public class AhiAssetsController(
             }
             case AttributeTypeConstants.TYPE_RUNTIME:
             {
-                return new AssetAttributeDto();
+                var smc = sme as ISubmodelElementCollection;
+                var snapshot = smc.Value.FindFirstIdShort("Snapshot") as IProperty;
+                var extensions = smc.Extensions;
+                var triggerAttributeIdStr = extensions.FirstOrDefault(e => e.Name == nameof(AssetAttributeRuntime.TriggerAttributeId))?.Value;
+                Guid? triggerAttributeId = triggerAttributeIdStr != null ? Guid.Parse(triggerAttributeIdStr) : null;
+                var triggerAttributeIds = extensions.FirstOrDefault(e => e.Name == nameof(AssetAttributeRuntime.TriggerAttributeIds))?.Value;
+                var enabledExpression = extensions.FirstOrDefault(e => e.Name == nameof(AssetAttributeRuntime.EnabledExpression))?.Value;
+                var expression = extensions.FirstOrDefault(e => e.Name == nameof(AssetAttributeRuntime.Expression))?.Value;
+                var expressionCompile = extensions.FirstOrDefault(e => e.Name == nameof(AssetAttributeRuntime.ExpressionCompile))?.Value;
+                AttributeMapping payload;
+
+                {
+                    Guid? triggerAssetId = Guid.Parse(sm.Id);
+                    bool? hasTriggerError = null;
+                    if (triggerAttributeId != null)
+                    {
+                        var triggers = JsonConvert.DeserializeObject<IEnumerable<Guid>>(triggerAttributeIds);
+                        var triggerAssetAttributeExists = triggers.Contains(triggerAttributeId.Value);
+                        if (!triggerAssetAttributeExists)
+                            hasTriggerError = true;
+                    }
+                    payload = JObject.FromObject(new
+                    {
+                        id = Guid.Parse(smc.IdShort),
+                        enabledExpression = bool.TryParse(enabledExpression, out var enabled) && enabled,
+                        expression,
+                        expressionCompile,
+                        triggerAssetId,
+                        triggerAttributeId,
+                        hasTriggerError
+                    }).ToObject<AttributeMapping>();
+                }
+
+                return new AssetAttributeDto
+                {
+                    AssetId = Guid.Parse(sm.Id),
+                    AttributeType = smc.Category,
+                    CreatedUtc = smc.TimeStampCreate,
+                    DataType = MappingHelper.ToAhiDataType(snapshot.ValueType),
+                    DecimalPlace = null, // [TODO]
+                    Deleted = false,
+                    Id = Guid.Parse(smc.IdShort),
+                    Name = smc.DisplayName.FirstOrDefault()?.Text ?? smc.IdShort,
+                    SequentialNumber = -1, // [TODO]
+                    Value = snapshot.Value,
+                    Payload = payload,
+                    ThousandSeparator = null, // [TODO]
+                    Uom = null, // [TODO]
+                    UomId = null, // [TODO]
+                    UpdatedUtc = smc.TimeStamp
+                };
             }
             default:
-                throw new NotSupportedException();
+                return null;
         }
     }
 
-    private (IAssetAdministrationShell Aas, ISubmodelElement Sme) GetAliasSme(IReferenceElement reference)
+    [ApiExplorerSettings(IgnoreApi = true)]
+    public (IAssetAdministrationShell Aas, string SubmodelId, ISubmodelElement Sme) GetAliasSme(IReferenceElement reference)
     {
         var aasId = ConvertHelper.ToBase64(reference.Value.Keys[0].Value);
         var aasResult = aasRepoController.GetAssetAdministrationShellById(aasId) as ObjectResult;
         var aliasAas = aasResult.Value as IAssetAdministrationShell;
-        var smId = ConvertHelper.ToBase64(reference.Value.Keys[1].Value);
+        var smIdRaw = reference.Value.Keys[1].Value;
+        var smId = ConvertHelper.ToBase64(smIdRaw);
         var smeIdPath = reference.Value.Keys[2].Value;
         var smeResult = smRepoController.GetSubmodelElementByPathSubmodelRepo(smId, smeIdPath, LevelEnum.Deep, ExtentEnum.WithoutBlobValue) as ObjectResult;
         var aliasSme = smeResult.Value as ISubmodelElement;
-        return (aliasAas, aliasSme);
+        return (aliasAas, smIdRaw, aliasSme);
+    }
+
+    [ApiExplorerSettings(IgnoreApi = true)]
+    public (IAssetAdministrationShell Aas, string SubmodelId, ISubmodelElement Sme) GetRootAliasSme(IReferenceElement reference)
+    {
+        var (aliasAas, smId, aliasSme) = GetAliasSme(reference);
+        while (aliasSme is IReferenceElement refElement)
+            (aliasAas, smId, aliasSme) = GetAliasSme(refElement);
+        return (aliasAas, smId, aliasSme);
     }
 
     private AttributeDto ToAttributeDto(ISubmodelElement sme)
@@ -474,7 +546,7 @@ public class AhiAssetsController(
                 {
                     v = prop.Value,
                     q = 192, // [TODO]
-                    ts = 0, // [NOTE] TimeStamp is not serialized
+                    ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), // [NOTE] TimeStamp is not serialized
                     lts = 0
                 };
                 var tsList = new List<TimeSeriesDto>() { tsDto };
@@ -490,14 +562,16 @@ public class AhiAssetsController(
                     DecimalPlace = null, // [TODO]
                     ThousandSeparator = null, // [TODO]
                     Series = tsList,
-                    DataType = ToAhiDataType(prop.ValueType)
+                    DataType = MappingHelper.ToAhiDataType(prop.ValueType)
                 };
             }
             case AttributeTypeConstants.TYPE_ALIAS:
             {
                 var reference = sme as IReferenceElement;
-                var (_, aliasSme) = GetAliasSme(reference);
+                var (_, _, aliasSme) = GetRootAliasSme(reference);
                 var aliasAttrDto = ToAttributeDto(aliasSme);
+                if (aliasAttrDto is null)
+                    return null;
                 return new AttributeDto
                 {
                     GapfillFunction = aliasAttrDto.GapfillFunction,
@@ -515,10 +589,33 @@ public class AhiAssetsController(
             }
             case AttributeTypeConstants.TYPE_RUNTIME:
             {
-                return new AttributeDto();
+                var smc = sme as ISubmodelElementCollection;
+                var snapshot = smc.Value.FindFirstIdShort("Snapshot") as IProperty;
+                var tsDto = new TimeSeriesDto()
+                {
+                    v = snapshot.Value,
+                    q = 192, // [TODO]
+                    ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), // [NOTE] TimeStamp is not serialized
+                    lts = 0
+                };
+                var tsList = new List<TimeSeriesDto>() { tsDto };
+                return new AttributeDto
+                {
+                    GapfillFunction = PostgresFunction.TIME_BUCKET_GAPFILL,
+                    Quality = "Good [Non-Specific]", // [TODO]
+                    QualityCode = 192, // [TODO]
+                    AttributeId = Guid.Parse(smc.IdShort),
+                    AttributeName = smc.DisplayName.FirstOrDefault()?.Text ?? smc.IdShort,
+                    AttributeType = smc.Category,
+                    Uom = null, // [TODO]
+                    DecimalPlace = null, // [TODO]
+                    ThousandSeparator = null, // [TODO]
+                    Series = tsList,
+                    DataType = MappingHelper.ToAhiDataType(snapshot.ValueType)
+                };
             }
             default:
-                throw new NotSupportedException();
+                return null;
         }
     }
 
@@ -534,43 +631,16 @@ public class AhiAssetsController(
         {
             foreach (var sme in sm.SubmodelElements)
             {
-                attributes.Add(ToAssetAttributeDto(sm, sme));
+                var attr = ToAssetAttributeDto(sm, sme);
+                if (attr is not null)
+                    attributes.Add(attr);
             }
         }
         return attributes;
-    }
-
-    private DataTypeDefXsd ToAasDataType(string dataType)
-    {
-        return dataType switch
-        {
-            DataTypeConstants.TYPE_TEXT => DataTypeDefXsd.String,
-            DataTypeConstants.TYPE_BOOLEAN => DataTypeDefXsd.Boolean,
-            DataTypeConstants.TYPE_DATETIME => DataTypeDefXsd.DateTime,
-            DataTypeConstants.TYPE_DOUBLE => DataTypeDefXsd.Double,
-            DataTypeConstants.TYPE_INTEGER => DataTypeDefXsd.Integer,
-            DataTypeConstants.TYPE_TIMESTAMP => DataTypeDefXsd.Long,
-            _ => DataTypeDefXsd.String,
-        };
     }
 
     private int? GetAttributeDecimalPlace(AssetAttributeCommand attribute)
     {
         return attribute.DataType == DataTypeConstants.TYPE_DOUBLE ? attribute.DecimalPlace : null;
     }
-
-    private string ToAhiDataType(DataTypeDefXsd aasDataType)
-    {
-        return aasDataType switch
-        {
-            DataTypeDefXsd.String => DataTypeConstants.TYPE_TEXT,
-            DataTypeDefXsd.Boolean => DataTypeConstants.TYPE_BOOLEAN,
-            DataTypeDefXsd.DateTime => DataTypeConstants.TYPE_DATETIME,
-            DataTypeDefXsd.Double => DataTypeConstants.TYPE_DOUBLE,
-            DataTypeDefXsd.Integer => DataTypeConstants.TYPE_INTEGER,
-            DataTypeDefXsd.Long => DataTypeConstants.TYPE_TIMESTAMP,
-            _ => DataTypeConstants.TYPE_TEXT, // Default to TEXT for unsupported types
-        };
-    }
-
 }
