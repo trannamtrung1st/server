@@ -33,7 +33,7 @@ public class CalculateRuntimeAttributeHandler(
 {
     public async Task Start()
     {
-        var subscriber = await mqttClientManager.GetSubscriber();
+        var subscriber = await mqttClientManager.GetSubscriber(nameof(CalculateRuntimeAttributeHandler));
 
         var options = new MqttClientSubscribeOptionsBuilder()
             .WithTopicFilter(AasEvents.SubmodelElementUpdated, MqttQualityOfServiceLevel.ExactlyOnce)
@@ -97,6 +97,7 @@ public class CalculateRuntimeAttributeHandler(
                     await timeSeriesService.AddRuntimeSeries(attributeId, series);
                     _ = smRepoController.PutSubmodelElementByPathSubmodelRepo(sme, encodedSmId, sme.IdShort, level: LevelEnum.Deep);
                     await eventPublisher.Publish(AasEvents.SubmodelElementUpdated, sme);
+                    await eventPublisher.Publish(AasEvents.AasUpdated, sm.Id);
                 }
             }
         }

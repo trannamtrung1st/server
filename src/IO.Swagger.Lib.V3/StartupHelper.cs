@@ -17,9 +17,11 @@ public static class StartupHelper
             .AddSingleton<MqttClientManager>()
             .AddScoped<TimeSeriesService>()
             .AddScoped<AasApiHelperService>()
+            .AddSingleton<NotificationService>()
 
             .AddSingleton<EventPublisher>()
             .AddSingleton<IEventHandler, CalculateRuntimeAttributeHandler>()
+            .AddSingleton<IEventHandler, NotifyAssetChangedHandler>()
 
             .AddScoped<AhiAssetsController>()
             .AddScoped<AssetAdministrationShellRepositoryAPIApiController>()

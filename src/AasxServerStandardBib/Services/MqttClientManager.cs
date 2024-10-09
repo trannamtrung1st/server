@@ -1,6 +1,7 @@
 namespace AasxServerStandardBib.Services;
 
 using System;
+using System.Collections.Concurrent;
 using System.Threading.Tasks;
 using MQTTnet;
 using MQTTnet.Client;
@@ -9,19 +10,22 @@ using MQTTnet.Client.Options;
 public class MqttClientManager : IDisposable
 {
     private readonly IMqttClient _publisher;
-    private readonly IMqttClient _subscriber;
+    private readonly ConcurrentDictionary<string, IMqttClient> _subscribers;
 
     public MqttClientManager()
     {
         //create MQTT Client and Connect using options above
         _publisher = new MqttFactory().CreateMqttClient();
-        _subscriber = new MqttFactory().CreateMqttClient();
+        _subscribers = new();
     }
 
     public void Dispose()
     {
         using var _1 = _publisher;
-        using var _2 = _subscriber;
+        foreach (var s in _subscribers.Values)
+        {
+            s.Dispose();
+        }
     }
 
     public async Task<IMqttClient> GetPublisher()
@@ -30,10 +34,11 @@ public class MqttClientManager : IDisposable
         return _publisher;
     }
 
-    public async Task<IMqttClient> GetSubscriber()
+    public async Task<IMqttClient> GetSubscriber(string key)
     {
-        await TryConnect(_subscriber, "Event Subscriber");
-        return _subscriber;
+        var subscriber = _subscribers.GetOrAdd(key, _ => new MqttFactory().CreateMqttClient());
+        await TryConnect(subscriber, key);
+        return subscriber;
     }
 
     private static async Task TryConnect(IMqttClient mqttClient, string clientId)

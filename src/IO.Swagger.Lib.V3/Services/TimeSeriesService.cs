@@ -66,6 +66,7 @@ public class TimeSeriesService(
             var encodedSmId = ConvertHelper.ToBase64(sm.Id);
             _ = smRepoController.PutSubmodelElementByPathSubmodelRepo(dynamicAttr, encodedSmId, dynamicAttr.IdShort, level: Swagger.Models.LevelEnum.Deep);
             await eventPublisher.Publish(AasEvents.SubmodelElementUpdated, dynamicAttr);
+            await eventPublisher.Publish(AasEvents.AasUpdated, sm.Id);
             Program.saveEnvDynamic(0);
         }
     }

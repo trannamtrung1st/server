@@ -50,6 +50,7 @@ public class RuntimeAssetAttributeHandler(
         smRepoController.PostSubmodelElementSubmodelRepo(smc, encodedSmId, first: false);
 
         await eventPublisher.Publish(AasEvents.SubmodelElementUpdated, smc);
+        await eventPublisher.Publish(AasEvents.AasUpdated, attribute.AssetId);
     }
 
     private async Task ValidateRuntimeAttribute(ISubmodelElementCollection smc, IAssetAdministrationShell? aas, IEnumerable<ISubmodelElement> currentSmeList, AssetAttributeCommand attribute, IEnumerable<AssetAttributeCommand> inputAttributes, AssetAttributeRuntime runtimePayload)

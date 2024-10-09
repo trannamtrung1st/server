@@ -298,6 +298,7 @@ public class AhiAssetsController(
                                     property.Value = updateAttribute.Value;
                                     smRepoController.PutSubmodelElementByPathSubmodelRepo(property, smId, smeIdPath, level: LevelEnum.Deep);
                                     await eventPublisher.Publish(AasEvents.SubmodelElementUpdated, property);
+                                    await eventPublisher.Publish(AasEvents.AasUpdated, assetId);
                                     break;
                                 }
                             }
@@ -427,6 +428,7 @@ public class AhiAssetsController(
         var encodedSmId = ConvertHelper.ToBase64(sm.Id);
         _ = smRepoController.PutSubmodelElementByPathSubmodelRepo(sme, encodedSmId, sme.IdShort, level: LevelEnum.Deep);
         await eventPublisher.Publish(AasEvents.SubmodelElementUpdated, sme);
+        await eventPublisher.Publish(AasEvents.AasUpdated, sm.Id);
         Program.saveEnvDynamic(0);
         return Ok(true);
     }
