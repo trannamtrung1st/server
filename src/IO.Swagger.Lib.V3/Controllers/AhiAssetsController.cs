@@ -3,6 +3,7 @@ namespace IO.Swagger.Lib.V3.Controllers;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using AasxServer;
 using AasxServerStandardBib;
@@ -22,7 +23,7 @@ using Newtonsoft.Json.Linq;
 
 [ApiController]
 [Route("dev/assets")]
-public class AhiAssetsController(
+public partial class AhiAssetsController(
     AssetAdministrationShellRepositoryAPIApiController aasRepoController,
     SubmodelRepositoryAPIApiController smRepoController,
     RuntimeAssetAttributeHandler runtimeAssetAttributeHandler,
@@ -34,12 +35,16 @@ public class AhiAssetsController(
     [HttpPost("search")]
     public async Task<IActionResult> SearchAsync([FromBody] GetAssetByCriteria command)
     {
-        var allAasResult = aasRepoController.GetAllAssetAdministrationShells(
-            assetIds: null, idShort: null, limit: null, cursor: null) as ObjectResult;
-        var pagedResult = allAasResult.Value as PagedResult;
-        var assets = pagedResult.result
-            .OfType<IAssetAdministrationShell>().AsEnumerable()
-            .Where(a => Guid.TryParse(a.Id, out _)).Select(a => aasApiHelper.ToGetAssetSimpleDto(a, null)).ToArray();
+        var parentFilter = ParentFilterRegex();
+        var parentFilterValue = parentFilter.Match(command.Filter).Groups[1].Value;
+        Guid? parentId = parentFilterValue == "null" ? null : Guid.Parse(parentFilterValue);
+        IAssetAdministrationShell? parent = null;
+
+        if (parentId.HasValue)
+            parent = aasApiHelper.GetById(parentId.ToString());
+
+        var assets = aasApiHelper.FilterAas(filterParent: true, parentId)
+            .Select(a => aasApiHelper.ToGetAssetSimpleDto(a, parent, attributes: null)).ToArray();
         var totalCount = assets.Length;
 
         var ahiResp = new BaseSearchResponse<GetAssetSimpleDto>(
@@ -47,6 +52,23 @@ public class AhiAssetsController(
             totalCount: totalCount,
             pageSize: command.PageSize,
             pageIndex: command.PageIndex,
+            data: assets
+        );
+
+        return Ok(ahiResp);
+    }
+
+    [HttpGet("{id}/children")]
+    public async Task<IActionResult> LoadChildrenAsync(Guid id)
+    {
+        var assets = aasApiHelper.FilterAas(filterParent: true, parentId: id)
+            .Select(a => aasApiHelper.ToGetAssetSimpleDto(a)).ToArray();
+
+        var ahiResp = new BaseSearchResponse<GetAssetSimpleDto>(
+            duration: 0,
+            totalCount: assets.Length,
+            pageSize: int.MaxValue,
+            pageIndex: 0,
             data: assets
         );
 
@@ -98,9 +120,25 @@ public class AhiAssetsController(
                         },
                         DisplayName = [new LangStringNameType("en-US", addAssetDto.Name)],
                         IdShort = aasId,
-                        Parent = null, // [TODO]
-                        Submodels = []
+                        Submodels = [],
+                        Extensions = []
                     };
+
+                    aas.Extensions.Add(new Extension(
+                        name: "ParentAssetId",
+                        valueType: DataTypeDefXsd.String,
+                        value: addAssetDto.ParentAssetId?.ToString()));
+
+                    var (pathId, pathName, parent) = aasApiHelper.BuildResourcePath(aas, parentAssetId: addAssetDto.ParentAssetId);
+                    aas.Extensions.Add(new Extension(
+                        name: "ResourcePath",
+                        valueType: DataTypeDefXsd.String,
+                        value: pathId));
+                    aas.Extensions.Add(new Extension(
+                        name: "ResourcePathName",
+                        valueType: DataTypeDefXsd.String,
+                        value: pathName));
+
                     aasRepoController.PostAssetAdministrationShell(aas);
 
                     var defaultSm = new Submodel(id: aas.Id)
@@ -117,7 +155,7 @@ public class AhiAssetsController(
                     };
                     smRepoController.PostSubmodel(defaultSm, aasIdentifier: ConvertHelper.ToBase64(aas.Id));
 
-                    resultModel.Values = aasApiHelper.ToGetAssetSimpleDto(aas, null);
+                    resultModel.Values = aasApiHelper.ToGetAssetSimpleDto(aas);
                     break;
 
                 case "edit":
@@ -203,10 +241,7 @@ public class AhiAssetsController(
                             case AttributeTypeConstants.TYPE_ALIAS:
                             {
                                 var aliasPayload = JObject.FromObject(attribute.Payload).ToObject<AssetAttributeAlias>();
-
-                                var aliasAasId = ConvertHelper.ToBase64(aliasPayload.AliasAssetId.ToString());
-                                var aliasAasResult = aasRepoController.GetAssetAdministrationShellById(aliasAasId) as ObjectResult;
-                                var aliasAas = aliasAasResult.Value as IAssetAdministrationShell;
+                                var aliasAas = aasApiHelper.GetById(aliasPayload.AliasAssetId.ToString());
 
                                 var aliasSmRef = aliasAas.Submodels.First(sm => sm.GetAsExactlyOneKey().Value == aliasAas.Id);
                                 var aliasSmRefKey = ConvertHelper.ToBase64(aliasSmRef.GetAsExactlyOneKey().Value);
@@ -334,7 +369,13 @@ public class AhiAssetsController(
     {
         var (aas, submodels, _) = aasApiHelper.GetFullAasById(id);
         var attributes = aasApiHelper.ToAttributes(submodels);
-        return Ok(aasApiHelper.ToGetAssetDto(aas, attributes));
+
+        var parentAssetId = aas.Extensions.FirstOrDefault(e => e.Name == "ParentAssetId")?.Value;
+        IAssetAdministrationShell? parent = null;
+        if (parentAssetId is not null)
+            parent = aasApiHelper.GetById(parentAssetId);
+
+        return Ok(aasApiHelper.ToGetAssetDto(aas, parent, attributes));
     }
 
     [HttpGet("{id}/fetch")]
@@ -342,15 +383,15 @@ public class AhiAssetsController(
     {
         var (aas, submodels, _) = aasApiHelper.GetFullAasById(id);
         var attributes = aasApiHelper.ToAttributes(submodels);
-        return Ok(aasApiHelper.ToGetAssetSimpleDto(aas, attributes));
+        var parentAssetId = aas.Extensions.FirstOrDefault(e => e.Name == "ParentAssetId")?.Value;
+
+        return Ok(aasApiHelper.ToGetAssetSimpleDto(aas, attributes: attributes));
     }
 
     [HttpGet("{id}/snapshot")]
     public async Task<IActionResult> GetAttributeSnapshotAsync(Guid id)
     {
-        var encodedId = ConvertHelper.ToBase64(id.ToString());
-        var aasResult = aasRepoController.GetAssetAdministrationShellById(encodedId) as ObjectResult;
-        var aas = aasResult.Value as IAssetAdministrationShell;
+        var aas = aasApiHelper.GetById(id.ToString());
         var attributes = new List<AttributeDto>();
 
         foreach (var sm in aas.Submodels)
@@ -380,19 +421,15 @@ public class AhiAssetsController(
     public async Task<IActionResult> GetAssetPathsAsync([FromBody] IEnumerable<Guid> ids)
     {
         var paths = new List<AssetPathDto>();
-        var aassResult = aasRepoController.GetAllAssetAdministrationShells(
-            assetIds: ids.Select(id => new SpecificAssetId(name: string.Empty, value: id.ToString())).ToList(),
-            idShort: null, limit: null, cursor: null
-        ) as ObjectResult;
-        var pagedResult = aassResult.Value as PagedResult;
-        var assets = pagedResult.result
-            .OfType<IAssetAdministrationShell>().AsEnumerable()
-            .Where(a => Guid.TryParse(a.Id, out _)).Select(a => aasApiHelper.ToGetAssetSimpleDto(a, null)).ToArray();
+        var aasList = aasApiHelper.FilterAas(ids: ids);
 
-        foreach (var aas in assets)
+        foreach (var aas in aasList)
         {
-            // [TODO] hierarchy
-            var assetPathDto = new AssetPathDto(aas.Id, pathId: null, pathName: null);
+            var pathId = aas.Extensions.FirstOrDefault(e => e.Name == "ResourcePath")?.Value
+                .Replace("objects/", string.Empty)
+                .Replace("children/", string.Empty);
+            var pathName = aas.Extensions.FirstOrDefault(e => e.Name == "ResourcePathName")?.Value;
+            var assetPathDto = new AssetPathDto(Guid.Parse(aas.Id), pathId, pathName);
             paths.Add(assetPathDto);
         }
 
@@ -442,4 +479,7 @@ public class AhiAssetsController(
         Program.saveEnvDynamic(0);
         return Ok(true);
     }
+
+    [GeneratedRegex(@"""parentAssetId == (.+?)""")]
+    private static partial Regex ParentFilterRegex();
 }

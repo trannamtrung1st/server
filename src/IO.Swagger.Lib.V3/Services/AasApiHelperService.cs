@@ -18,9 +18,8 @@ public class AasApiHelperService(
 {
     public (IAssetAdministrationShell Aas, string SubmodelId, ISubmodelElement Sme) GetAliasSme(IReferenceElement reference)
     {
-        var aasId = ConvertHelper.ToBase64(reference.Value.Keys[0].Value);
-        var aasResult = aasRepoController.GetAssetAdministrationShellById(aasId) as ObjectResult;
-        var aliasAas = aasResult.Value as IAssetAdministrationShell;
+        var aasId = reference.Value.Keys[0].Value;
+        var aliasAas = GetById(aasId);
         var smIdRaw = reference.Value.Keys[1].Value;
         var smId = ConvertHelper.ToBase64(smIdRaw);
         var smeIdPath = reference.Value.Keys[2].Value;
@@ -39,9 +38,7 @@ public class AasApiHelperService(
 
     public (IAssetAdministrationShell aas, List<ISubmodel> submodels, IEnumerable<ISubmodelElement> elements) GetFullAasById(Guid id)
     {
-        var encodedId = ConvertHelper.ToBase64(id.ToString());
-        var aasResult = aasRepoController.GetAssetAdministrationShellById(encodedId) as ObjectResult;
-        var aas = aasResult.Value as IAssetAdministrationShell;
+        var aas = GetById(id.ToString());
         var submodels = new List<ISubmodel>();
 
         foreach (var sm in aas.Submodels)
@@ -56,7 +53,9 @@ public class AasApiHelperService(
         return (aas, submodels, elements);
     }
 
-    public GetAssetSimpleDto ToGetAssetSimpleDto(IAssetAdministrationShell aas, IEnumerable<AssetAttributeDto> attributes)
+    public GetAssetSimpleDto ToGetAssetSimpleDto(IAssetAdministrationShell aas,
+        IAssetAdministrationShell? parent = null,
+        IEnumerable<AssetAttributeDto>? attributes = null)
     {
         return new GetAssetSimpleDto()
         {
@@ -64,7 +63,7 @@ public class AasApiHelperService(
             AssetTemplateName = null, // [TODO]
             Name = aas.DisplayName?.FirstOrDefault()?.Text ?? aas.IdShort,
             Attributes = attributes,
-            Children = null, // [TODO]
+            Children = [],
             CreatedBy = aas.Administration?.Creator?.GetAsExactlyOneKey()?.Value, // [TODO]
             CreatedUtc = aas.TimeStampCreate,
             CurrentTimestamp = DateTime.UtcNow,
@@ -74,9 +73,9 @@ public class AasApiHelperService(
             RetentionDays = -1, // [TODO],
             Id = Guid.TryParse(aas.Id, out var id) ? id : default,
             IsDocument = false, // [TODO]
-            ParentAssetId = null, // [TODO]
-            Parent = null, // [TODO]
-            ResourcePath = null, // [TODO]
+            ParentAssetId = Guid.TryParse(aas.Extensions?.FirstOrDefault(e => e.Name == "ParentAssetId")?.Value, out var pId) ? pId : null,
+            Parent = parent != null ? ToGetAssetSimpleDto(aas: parent, parent: null, attributes: null) : null,
+            ResourcePath = aas.Extensions?.FirstOrDefault(e => e.Name == "ResourcePath")?.Value,
             RequestLockTimeout = null, // [TODO]
             RequestLockTimestamp = null, // [TODO]
             RequestLockUserUpn = null, // [TODO]
@@ -346,9 +345,17 @@ public class AasApiHelperService(
         }
     }
 
-    public GetAssetDto ToGetAssetDto(IAssetAdministrationShell aas, IEnumerable<AssetAttributeDto> assetAttributes)
+    public IAssetAdministrationShell GetById(string id)
     {
-        return ToGetAssetSimpleDto(aas, assetAttributes);
+        var encodedId = ConvertHelper.ToBase64(id);
+        var aasResult = aasRepoController.GetAssetAdministrationShellById(encodedId) as ObjectResult;
+        var aas = aasResult.Value as IAssetAdministrationShell;
+        return aas;
+    }
+
+    public GetAssetDto ToGetAssetDto(IAssetAdministrationShell aas, IAssetAdministrationShell? parent, IEnumerable<AssetAttributeDto>? assetAttributes)
+    {
+        return ToGetAssetSimpleDto(aas, parent, assetAttributes);
     }
 
     public IEnumerable<AssetAttributeDto> ToAttributes(IEnumerable<ISubmodel> submodel)
@@ -364,6 +371,45 @@ public class AasApiHelperService(
             }
         }
         return attributes;
+    }
+
+    public (string PathId, string? PathName, IAssetAdministrationShell? parentAas) BuildResourcePath(IAssetAdministrationShell currentAas, Guid? parentAssetId)
+    {
+        var currentName = currentAas.DisplayName?.FirstOrDefault()?.Text;
+        if (parentAssetId.HasValue)
+        {
+            var parentAas = GetById(parentAssetId.ToString());
+            var parentPathId = parentAas.Extensions.FirstOrDefault(e => e.Name == "ResourcePath").Value;
+            var parentPathName = parentAas.Extensions.FirstOrDefault(e => e.Name == "ResourcePathName").Value;
+            return ($"{parentPathId}/children/{currentAas.Id}", $"{parentPathName}/{currentName}", parentAas);
+        }
+        return ($"objects/{currentAas.Id}", currentName, null);
+    }
+
+    public IEnumerable<IAssetAdministrationShell> FilterAas(bool filterParent = false, Guid? parentId = null, IEnumerable<Guid> ids = null)
+    {
+        var allAasResult = aasRepoController.GetAllAssetAdministrationShells(
+            assetIds: null, idShort: null, limit: null, cursor: null) as ObjectResult;
+        var pagedResult = allAasResult.Value as PagedResult;
+        var assets = pagedResult.result
+            .OfType<IAssetAdministrationShell>().AsEnumerable()
+            .Where(a => Guid.TryParse(a.Id, out _));
+
+        if (filterParent)
+        {
+            assets = assets.Where(a =>
+            {
+                var parentAssetId = a.Extensions.FirstOrDefault(e => e.Name == "ParentAssetId")?.Value;
+                return Guid.TryParse(parentAssetId, out var aPId) ? parentId == aPId : parentId == null;
+            });
+        }
+
+        if (ids != null)
+        {
+            assets = assets.Where(a => ids.Contains(Guid.Parse(a.Id)));
+        }
+
+        return assets;
     }
 
     public int? GetAttributeDecimalPlace(AssetAttributeCommand attribute)
