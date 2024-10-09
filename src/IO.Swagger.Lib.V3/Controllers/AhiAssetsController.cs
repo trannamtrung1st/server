@@ -296,6 +296,8 @@ public class AhiAssetsController(
                                     var property = smeResult.Value as IProperty;
                                     property.DisplayName = [new LangStringNameType("en-US", updateAttribute.Name)];
                                     property.Value = updateAttribute.Value;
+                                    await timeSeriesService.AddStaticSeries(
+                                        attributeId, series: TimeSeriesHelper.BuildSeriesDto(value: updateAttribute.Value));
                                     smRepoController.PutSubmodelElementByPathSubmodelRepo(property, smId, smeIdPath, level: LevelEnum.Deep);
                                     await eventPublisher.Publish(AasEvents.SubmodelElementUpdated, property);
                                     await eventPublisher.Publish(AasEvents.AasUpdated, assetId);

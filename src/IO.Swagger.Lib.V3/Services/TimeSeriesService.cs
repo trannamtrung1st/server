@@ -19,6 +19,7 @@ public class TimeSeriesService(
     EventPublisher eventPublisher)
 {
     private static readonly ConcurrentDictionary<Guid, List<TimeSeriesDto>> _runtimeSeries = new();
+    private static readonly ConcurrentDictionary<Guid, List<TimeSeriesDto>> _staticSeries = new();
     private static readonly ConcurrentDictionary<(string DeviceId, string MetricKey), List<TimeSeriesDto>> _deviceMetricSeries = new();
 
     public async Task<IEnumerable<TimeSeriesDto>> GetRuntimeSeries(Guid attributeId)
@@ -40,6 +41,15 @@ public class TimeSeriesService(
         var seriesList = _deviceMetricSeries.GetOrAdd((deviceId, metricKey), _ => new());
         lock (seriesList)
         { return seriesList.OrderByDescending(s => s.ts).FirstOrDefault(); }
+    }
+
+    public async Task AddStaticSeries(Guid attributeId, TimeSeriesDto series)
+    {
+        var seriesList = _staticSeries.GetOrAdd(attributeId, _ => new());
+        lock (seriesList)
+        {
+            seriesList.Add(series);
+        }
     }
 
     public async Task AddRuntimeSeries(Guid attributeId, TimeSeriesDto series)
