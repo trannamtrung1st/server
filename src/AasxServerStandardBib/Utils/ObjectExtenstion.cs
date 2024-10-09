@@ -107,13 +107,13 @@ namespace AasxServerStandardBib.Utils
                 case DataTypeConstants.TYPE_DOUBLE:
                 case DataTypeConstants.TYPE_INTEGER:
                     //https://dev.azure.com/AssetHealthInsights/Asset%20Backlogs/_workitems/edit/11775
-                    return double.TryParse(value.ToString(), out var v) && !double.IsNaN(v) ? value as object : valueText;
+                    return (double.TryParse(value.ToString(), out var v) && !double.IsNaN(v)) ? v : valueText;
                 case DataTypeConstants.TYPE_TEXT:
                     return Regex.IsMatch(value.ToString(), "^(?=.{0,255}$)") ? value as object : valueText;
                 case DataTypeConstants.TYPE_TIMESTAMP:
-                    return double.TryParse(value.ToString(), out _) ? value as object : valueText;
+                    return double.TryParse(value.ToString(), out var ts) ? ts : valueText;
                 case DataTypeConstants.TYPE_DATETIME:
-                    return DateTime.TryParse(value.ToString(), out _) ? value as object : valueText;
+                    return DateTime.TryParse(value.ToString(), out var dt) ? dt : valueText;
                 default:
                     return valueText;
             }
@@ -136,7 +136,7 @@ namespace AasxServerStandardBib.Utils
             }
             else
             {
-                return double.TryParse(value.ToString(), out var vb) && !double.IsNaN(vb) ? value as object : valueText;
+                return double.TryParse(value.ToString(), out var vb) && !double.IsNaN(vb) ? vb : valueText;
             }
         }
 

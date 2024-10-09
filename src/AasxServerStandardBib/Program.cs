@@ -349,6 +349,20 @@ namespace AasxServer
             return env[0].AasEnv.Submodels;
         }
 
+        public static (ISubmodel Submodel, ISubmodelElement Sme) FindSmeByGuid(Guid id)
+        {
+            var idStr = id.ToString();
+            foreach (var sm in Program.AllSubmodels())
+            {
+                foreach (var sme in sm.SubmodelElements)
+                {
+                    if (sme.IdShort == idStr)
+                        return (sm, sme);
+                }
+            }
+            return default;
+        }
+
         static Dictionary<string, SampleClient.UASampleClient> OPCClients = new Dictionary<string, SampleClient.UASampleClient>();
         static readonly object opcclientAddLock = new object(); // object for lock around connecting to an external opc server
 

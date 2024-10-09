@@ -15,8 +15,12 @@ public static class StartupHelper
         services
             .AddScoped<RuntimeAssetAttributeHandler>()
             .AddSingleton<MqttClientManager>()
+            .AddScoped<TimeSeriesService>()
+            .AddScoped<AasApiHelperService>()
+
             .AddSingleton<EventPublisher>()
             .AddSingleton<IEventHandler, CalculateRuntimeAttributeHandler>()
+
             .AddScoped<AhiAssetsController>()
             .AddScoped<AssetAdministrationShellRepositoryAPIApiController>()
             .AddScoped<SubmodelRepositoryAPIApiController>();

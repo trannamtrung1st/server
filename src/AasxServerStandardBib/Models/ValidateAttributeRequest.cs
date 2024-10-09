@@ -40,7 +40,7 @@ namespace AasxServerStandardBib.Models
 
         public Guid AssetId { get; set; }
 
-        public string Value { get; set; }
+        public object Value { get; set; }
 
         public string DataType { get; set; }
 

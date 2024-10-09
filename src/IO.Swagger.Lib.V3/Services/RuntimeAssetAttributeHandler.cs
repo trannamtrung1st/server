@@ -10,7 +10,6 @@ using AHI.Infrastructure.SharedKernel.Extension;
 using AasxServerStandardBib.Models;
 using AasxServerStandardBib.Utils;
 using IO.Swagger.Controllers;
-using IO.Swagger.Lib.V3.Controllers;
 using Microsoft.CodeAnalysis.CSharp.Scripting;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
@@ -22,17 +21,11 @@ namespace IO.Swagger.Lib.V3.Services;
 
 public class RuntimeAssetAttributeHandler(
     ILogger<RuntimeAssetAttributeHandler> logger,
-    EventPublisher eventPublisher)
+    EventPublisher eventPublisher,
+    TimeSeriesService timeSeriesService,
+    SubmodelRepositoryAPIApiController smRepoController,
+    AasApiHelperService aasApiHelper)
 {
-    private AhiAssetsController _ahiAssetsController;
-    private SubmodelRepositoryAPIApiController _smRepoController;
-
-    public void SetControllers(AhiAssetsController ahiAssetsController, SubmodelRepositoryAPIApiController smRepoController)
-    {
-        _ahiAssetsController = ahiAssetsController;
-        _smRepoController = smRepoController;
-    }
-
     public async Task AddAttributeAsync(AssetAttributeCommand attribute, IEnumerable<AssetAttributeCommand> inputAttributes, CancellationToken cancellationToken)
     {
         var runtimePayload = JObject.FromObject(attribute.Payload).ToObject<AssetAttributeRuntime>();
@@ -41,17 +34,20 @@ public class RuntimeAssetAttributeHandler(
             DisplayName = [new LangStringNameType("en-US", attribute.Name)],
             IdShort = attribute.Id.ToString(),
             Category = attribute.AttributeType,
-            Value = []
+            Value = [
+                new Property(valueType: DataTypeDefXsd.String, idShort: "DataType", displayName: [new LangStringNameType("en-US", "DataType")], value: attribute.DataType),
+                TimeSeriesHelper.CreateEmptySnapshot(attribute.DataType)
+            ]
         };
 
         if (runtimePayload.EnabledExpression)
         {
-            var (aas, _, elements) = _ahiAssetsController.GetFullAasById(attribute.AssetId);
+            var (aas, _, elements) = aasApiHelper.GetFullAasById(attribute.AssetId);
             await ValidateRuntimeAttribute(smc, aas, elements, attribute, inputAttributes, runtimePayload);
         }
 
         var encodedSmId = ConvertHelper.ToBase64(attribute.AssetId.ToString());
-        _smRepoController.PostSubmodelElementSubmodelRepo(smc, encodedSmId, first: false);
+        smRepoController.PostSubmodelElementSubmodelRepo(smc, encodedSmId, first: false);
 
         await eventPublisher.Publish(AasEvents.SubmodelElementUpdated, smc);
     }
@@ -103,10 +99,9 @@ public class RuntimeAssetAttributeHandler(
         }
 
         runtimePayload.ExpressionCompile = expression;
-        var triggers = CreateRuntimeTriggers(runtimePayload, matchedAttributes, inputAttributes.Select(x => x.Id).Distinct());
+        var triggers = CreateRuntimeTriggers(runtimePayload, matchedAttributes, inputAttributes.Select(x => x.Id).Concat(matchedAttributes).Distinct());
 
         smc.Value.AddRange([
-            new Property(valueType: DataTypeDefXsd.String, idShort: "DataType", displayName: [new LangStringNameType("en-US", "DataType")], value: attribute.DataType),
             new Property(valueType: DataTypeDefXsd.String, idShort: nameof(runtimePayload.Expression), displayName: [new LangStringNameType("en-US", nameof(runtimePayload.Expression))], value: runtimePayload.Expression),
             new Property(valueType: DataTypeDefXsd.String, idShort: nameof(runtimePayload.ExpressionCompile), displayName: [new LangStringNameType("en-US", nameof(runtimePayload.ExpressionCompile))], value: runtimePayload.ExpressionCompile),
             new Property(valueType: DataTypeDefXsd.Boolean, idShort: nameof(runtimePayload.EnabledExpression), displayName: [new LangStringNameType("en-US", nameof(runtimePayload.EnabledExpression))], value: runtimePayload.EnabledExpression.ToString().ToLower(CultureInfo.InvariantCulture)),
@@ -115,20 +110,6 @@ public class RuntimeAssetAttributeHandler(
 
         if (runtimePayload.TriggerAttributeId.HasValue)
             smc.Value.Add(new Property(valueType: DataTypeDefXsd.String, idShort: nameof(runtimePayload.TriggerAttributeId), displayName: [new LangStringNameType("en-US", nameof(runtimePayload.TriggerAttributeId))], value: runtimePayload.TriggerAttributeId.ToString()));
-
-        smc.Value.Add(new SubmodelElementCollection()
-        {
-            DisplayName = [new LangStringNameType("en-US", "Snapshot")],
-            IdShort = "Snapshot"
-        });
-
-        smc.Value.Add(new SubmodelElementList(AasSubmodelElements.SubmodelElementCollection)
-        {
-            DisplayName = [new LangStringNameType("en-US", "SeriesData")],
-            IdShort = "SeriesData",
-            OrderRelevant = true,
-            Value = []
-        });
     }
 
     private async Task<IEnumerable<(IReferenceElement Reference, IAssetAdministrationShell TargetAas, string TargetSmId, ISubmodelElement TargetElement)>> GetAliasTargetMappings(IAssetAdministrationShell? aas, IEnumerable<ISubmodelElement> currentSmeList)
@@ -137,7 +118,7 @@ public class RuntimeAssetAttributeHandler(
         var aliasAndTargetAliasPairs = new List<(IReferenceElement Reference, IAssetAdministrationShell TargetAas, string TargetSmId, ISubmodelElement TargetElement)>();
         foreach (var reference in validAliasAssetAttributes)
         {
-            var (aliasAas, smId, aliasSme) = _ahiAssetsController.GetRootAliasSme(reference);
+            var (aliasAas, smId, aliasSme) = aasApiHelper.GetRootAliasSme(reference);
             if (aliasSme == null)
                 continue;
             var pair = (reference, aliasAas, smId, aliasSme);

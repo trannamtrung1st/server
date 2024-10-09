@@ -1,9 +1,8 @@
-using System;
-using System.Linq.Expressions;
-using MessagePack;
+using Microsoft.AspNetCore.Mvc.ModelBinding.Validation;
 
 namespace AasxServerStandardBib.Models
 {
+    [ValidateNever]
     public class TimeSeriesDto
     {
         public long ts { get; set; }
